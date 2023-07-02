@@ -1,0 +1,47 @@
+name: build-archive-release
+on:
+    push:
+        branches:
+            - main
+        paths-ignore:
+            - "README.md"
+            - "LICENSE"
+    workflow_dispatch:
+permissions:
+    contents: write
+
+jobs:
+    create-release:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v3
+            - name: Setup Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: stable
+            - name: Run tests
+              run: cargo test
+            - name: Build binary
+              run: cargo build --release
+            - name: Get package version from cargo.toml
+              run: echo "VERSION=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')" | tee -a $GITHUB_ENV
+            - name: Generate archive file name
+              run: echo "ARCHIVE_FILE=./target/release/idiff_${{ env.VERSION }}.tar.gz" | tee -a "$GITHUB_ENV"
+            - name: Archive binary
+              run: tar czfv ${{ env.ARCHIVE_FILE }} -C ./target/release/ idiff
+            - name: Upload archive
+              uses: actions/upload-artifact@v3
+              with:
+                  name: idiff_${{ env.VERSION }}
+                  path: ${{ env.ARCHIVE_FILE }}
+            - name: Generate release tag
+              id: tag
+              run: |
+                  # echo "::set-output name=release_tag::${{env.VERSION}}"
+                  echo "release_tag=${{ env.VERSION }}" >> $GITHUB_OUTPUT
+            - name: Create Release
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: ${{ steps.tag.outputs.release_tag }}
+                  files: ${{ env.ARCHIVE_FILE }}
