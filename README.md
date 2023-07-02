@@ -34,6 +34,8 @@ This takes a naive two pass approach -
 
 ## Installation instructions
 
+### Option 1 - using Cargo
+
 ```sh
 # Clone the repository
 git clone https://github.com/krish-r/idiff.git
@@ -53,9 +55,26 @@ cargo run -- [OPTIONS]
 cargo install --path .
 ```
 
+### Option 2 - using the binary from release page
+
+```sh
+# Download the binary from release page
+curl -LO https://github.com/krish-r/idiff/releases/download/0.1.0/idiff_0.1.0.tar.gz
+
+# Extract the archive
+tar xvzf ./idiff_0.1.0.tar.gz && rm -ir ./idiff_0.1.0.tar.gz
+
+# add executable permission to user
+chmod u+x ./idiff
+
+# Move the file somewhere in your `$PATH` (for ex. `~/.local/bin`)
+mv ./idiff ~/.local/bin/idiff
+```
+
 ## Uninstall instructions
 
 ```sh
+# If the repository was cloned
 rm -r idiff/
 
 # If the binary was installed
