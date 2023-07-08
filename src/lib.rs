@@ -4,9 +4,6 @@ use clap::Parser;
 use colored::*;
 use image::GenericImage;
 
-/// Represents the (width, height) tuple.
-type Dimensions = (u32, u32);
-
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -57,10 +54,10 @@ pub fn run() {
         }
     };
 
-    let src_dimension: Dimensions = src.dimensions();
-    let tgt_dimension: Dimensions = tgt.dimensions();
+    let src_dimension: Dimensions = Dimensions::from(src.dimensions());
+    let tgt_dimension: Dimensions = Dimensions::from(tgt.dimensions());
 
-    if cli.strict && !same_dimensions(&src_dimension, &tgt_dimension) {
+    if cli.strict && !Dimensions::same(&src_dimension, &tgt_dimension) {
         eprintln!("{}",
             format!("'src' ({:?}) & 'tgt' ({:?}) do not have the same dimensions. (Try without 'strict' flag to check the differences)", src_dimension, tgt_dimension)
             .red());
@@ -75,7 +72,19 @@ pub fn run() {
         }
     };
 
-    let diff = percentage_difference(&src, &tgt, &bounds);
+    if !bounds.is_greater_than(cli.block * cli.block) {
+        eprintln!(
+            "{}",
+            format!(
+                "block size ({:?}) cannot be greater than the max bound (height: {:?},  width: {:?}).",
+                cli.block, bounds.max_height, bounds.max_width
+            )
+            .red()
+        );
+        std::process::exit(1);
+    }
+
+    let (diff, bounds_with_diff) = percentage_difference(&src, &tgt, &bounds, cli.block);
 
     if diff == 0.0 {
         println!(
@@ -106,7 +115,7 @@ pub fn run() {
         }
     };
 
-    highlight_difference(&src, &mut tgt_copy, &bounds, cli.block);
+    highlight(&mut tgt_copy, bounds_with_diff);
 
     let output = generate_output_file_name(cli.output, &cli.tgt).unwrap();
     tgt_copy.save(&output).unwrap();
@@ -116,12 +125,7 @@ pub fn run() {
     );
 }
 
-/// Checks if the given dimensions are same.
-fn same_dimensions(src: &Dimensions, tgt: &Dimensions) -> bool {
-    matches!(src.cmp(tgt), std::cmp::Ordering::Equal)
-}
-
-/// Creates a copy of the image
+/// Creates a copy of the image.
 fn copy_image(img: &image::RgbaImage) -> Result<image::RgbaImage, image::error::ImageError> {
     let mut img_copy: image::RgbaImage =
         image::ImageBuffer::new(img.dimensions().0, img.dimensions().1);
@@ -129,55 +133,65 @@ fn copy_image(img: &image::RgbaImage) -> Result<image::RgbaImage, image::error::
     Ok(img_copy)
 }
 
-/// Compare the pixel difference for the specified bounds between the images and calculate the percentage difference.
+/// Compare the pixel difference for every pixel for the specified bounds between the images and calculate the percentage difference.
+///
+/// Returns the percentage difference and Vec\<Bounds\> where the difference was observed.
 ///
 /// Logic: `(mismatching pixels / total pixels ) * 100`
-fn percentage_difference(src: &image::RgbaImage, tgt: &image::RgbaImage, bounds: &Bounds) -> f64 {
-    let mut pixel_difference = 0;
-
-    for y in bounds.min_height..bounds.max_height {
-        for x in bounds.min_width..bounds.max_width {
-            if src.get_pixel(x, y) != tgt.get_pixel(x, y) {
-                pixel_difference += 1;
-            }
-        }
-    }
-    let total_pixels = bounds.max_height * bounds.max_width;
-    (pixel_difference as f64 / total_pixels as f64) * 100.0
-}
-
-/// Compare the pixel difference for every pixel block for the specified bounds between the images and calculate the percentage difference.
-fn highlight_difference(
+fn percentage_difference(
     src: &image::RgbaImage,
-    tgt: &mut image::RgbaImage,
+    tgt: &image::RgbaImage,
     bounds: &Bounds,
     block: u32,
-) {
-    for start_height in (0..bounds.max_height).step_by(block as usize) {
-        for start_width in (0..bounds.max_width).step_by(block as usize) {
+) -> (f32, Vec<Bounds>) {
+    let mut total_diff = 0;
+    let mut bounds_with_difference = Vec::new();
+
+    for start_height in (bounds.min_height..bounds.max_height).step_by(block as usize) {
+        for start_width in (bounds.min_width..bounds.max_width).step_by(block as usize) {
             // Note: max width & height should not exceed the overall bounds
             let max_width = std::cmp::min(start_width + block, bounds.max_width);
             let max_height = std::cmp::min(start_height + block, bounds.max_height);
 
-            let current_dimension = Bounds::new(start_width, max_width, start_height, max_height);
-            let diff = percentage_difference(src, tgt, &current_dimension);
-            if diff != 0.0 {
-                for x in start_width..max_width {
-                    let pixel = tgt.get_pixel_mut(x, start_height);
-                    *pixel = image::Rgba([255, 0, 0, 255]);
-
-                    let pixel = tgt.get_pixel_mut(x, max_height - 1);
-                    *pixel = image::Rgba([255, 0, 0, 255]);
-                }
-
-                for y in start_height..max_height {
-                    let pixel = tgt.get_pixel_mut(start_width, y);
-                    *pixel = image::Rgba([255, 0, 0, 255]);
-
-                    let pixel = tgt.get_pixel_mut(max_width - 1, y);
-                    *pixel = image::Rgba([255, 0, 0, 255]);
-                }
+            let current_bound = Bounds::new(start_width, max_width, start_height, max_height);
+            let diff = pixel_difference(src, tgt, &current_bound);
+            if diff != 0 {
+                total_diff += diff;
+                bounds_with_difference.push(current_bound);
             }
+        }
+    }
+    let diff_percentage =
+        ((total_diff as f32) / ((bounds.max_height * bounds.max_width) as f32)) * 100.0;
+    (diff_percentage, bounds_with_difference)
+}
+
+/// Compare the pixel difference for the specified bounds between the images.
+fn pixel_difference(src: &image::RgbaImage, tgt: &image::RgbaImage, bounds: &Bounds) -> u32 {
+    let mut diff = 0;
+
+    for y in bounds.min_height..bounds.max_height {
+        for x in bounds.min_width..bounds.max_width {
+            if src.get_pixel(x, y) != tgt.get_pixel(x, y) {
+                diff += 1;
+            }
+        }
+    }
+
+    diff
+}
+
+/// Highlight the specified bounds in the image.
+fn highlight(img: &mut image::RgbaImage, bounds: Vec<Bounds>) {
+    for bound in bounds {
+        for x in bound.min_width..bound.max_width {
+            *img.get_pixel_mut(x, bound.min_height) = image::Rgba([255, 0, 0, 255]);
+            *img.get_pixel_mut(x, bound.max_height - 1) = image::Rgba([255, 0, 0, 255]);
+        }
+
+        for y in bound.min_height..bound.max_height {
+            *img.get_pixel_mut(bound.min_width, y) = image::Rgba([255, 0, 0, 255]);
+            *img.get_pixel_mut(bound.max_width - 1, y) = image::Rgba([255, 0, 0, 255]);
         }
     }
 }
@@ -197,6 +211,23 @@ fn generate_output_file_name(output: Option<String>, backup_file: &Path) -> Opti
     Some(output)
 }
 
+/// Represents the Dimension (width, height).
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct Dimensions(u32, u32);
+
+impl Dimensions {
+    /// Create Dimensions from a tuple.
+    fn from(d: (u32, u32)) -> Dimensions {
+        Dimensions(d.0, d.1)
+    }
+
+    /// Checks if the Dimensions are same.
+    fn same(d1: &Dimensions, d2: &Dimensions) -> bool {
+        matches!(d1.cmp(d2), std::cmp::Ordering::Equal)
+    }
+}
+
+/// Represents the Bound consisting of min/max width and min/max height.
 #[derive(Debug, PartialEq)]
 struct Bounds {
     min_width: u32,
@@ -206,6 +237,7 @@ struct Bounds {
 }
 
 impl Bounds {
+    /// Creates a new Bounds.
     fn new(min_width: u32, max_width: u32, min_height: u32, max_height: u32) -> Bounds {
         Bounds {
             min_width,
@@ -214,10 +246,10 @@ impl Bounds {
             max_height,
         }
     }
-    /// Get the max bounds from the provided width
+    /// Get the max bounds from the provided Dimensions (width & height).
     fn get_max_bounds(src: Dimensions, tgt: Dimensions) -> Result<Bounds, String> {
-        let (w1, h1) = src;
-        let (w2, h2) = tgt;
+        let Dimensions(w1, h1) = src;
+        let Dimensions(w2, h2) = tgt;
 
         let max_width = std::cmp::min(w1, w2);
         let max_height = std::cmp::min(h1, h2);
@@ -233,6 +265,11 @@ impl Bounds {
             max_height,
         })
     }
+
+    /// Checks if the max bound (bounds.max_width * bounds.max_height) is greater than the parameter.
+    fn is_greater_than(&self, other: u32) -> bool {
+        (self.max_width * self.max_height) > other
+    }
 }
 
 #[cfg(test)]
@@ -240,32 +277,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn should_return_true_for_matching_dimensions() {
+        let src = Dimensions(1, 1);
+        let tgt = Dimensions(1, 1);
+
+        assert!(Dimensions::same(&src, &tgt));
+    }
+
+    #[test]
     fn should_return_false_for_mismatching_dimensions() {
-        let src = (0, 0);
-        let tgt = (1, 1);
+        let src = Dimensions(0, 0);
+        let tgt = Dimensions(1, 1);
 
-        assert!(!same_dimensions(&src, &tgt));
+        assert!(!Dimensions::same(&src, &tgt));
     }
 
     #[test]
-    fn should_return_true_for_mismatching_dimensions() {
-        let src = (1, 1);
-        let tgt = (1, 1);
-
-        assert!(same_dimensions(&src, &tgt));
-    }
-
-    #[test]
-    fn should_return_zero_pct_diff_for_matching_images() {
+    fn should_return_zero_for_matching_images() {
         let src = image::ImageBuffer::new(100, 100);
         let tgt = image::ImageBuffer::new(100, 100);
         let bounds = Bounds::new(0, 100, 0, 100);
 
-        assert_eq!(0.0, percentage_difference(&src, &tgt, &bounds));
+        assert_eq!(0, pixel_difference(&src, &tgt, &bounds));
     }
 
     #[test]
-    fn should_return_non_zero_pct_diff_for_images_with_differences() {
+    fn should_return_non_zero_value_for_mismatching_images() {
         let src = image::ImageBuffer::new(100, 100);
 
         let mut tgt = image::ImageBuffer::new(100, 100);
@@ -274,24 +311,13 @@ mod tests {
 
         let bounds = Bounds::new(0, 100, 0, 100);
 
-        assert_eq!(0.02, percentage_difference(&src, &tgt, &bounds));
-    }
-
-    #[test]
-    fn should_return_err_for_zero_bounds() {
-        let src = (0, 0);
-        let tgt = (1, 1);
-
-        assert_eq!(
-            Err(String::from("Maximum width / height cannot be ZERO (0).")),
-            Bounds::get_max_bounds(src, tgt)
-        );
+        assert_eq!(2, pixel_difference(&src, &tgt, &bounds));
     }
 
     #[test]
     fn should_return_ok_for_non_zero_bounds() {
-        let src = (10, 100);
-        let tgt = (100, 10);
+        let src = Dimensions::from((10, 100));
+        let tgt = Dimensions::from((100, 10));
 
         assert_eq!(
             Ok(Bounds::new(0, 10, 0, 10)),
@@ -300,7 +326,18 @@ mod tests {
     }
 
     #[test]
-    fn should_generate_backup_file_name_by_default() {
+    fn should_return_err_for_zero_bounds() {
+        let src = Dimensions::from((0, 0));
+        let tgt = Dimensions::from((1, 1));
+
+        assert_eq!(
+            Err(String::from("Maximum width / height cannot be ZERO (0).")),
+            Bounds::get_max_bounds(src, tgt)
+        );
+    }
+
+    #[test]
+    fn should_generate_name_from_backup_if_option_is_none() {
         assert_eq!(
             Some(PathBuf::from("/target_test_diff.png")),
             generate_output_file_name(None, &PathBuf::from("/target_test.png"))
@@ -308,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn should_generate_output_file_name_when_option_is_provided() {
+    fn should_generate_name_from_option_if_option_is_some() {
         assert_eq!(
             Some(PathBuf::from("/custom_output_file.png")),
             generate_output_file_name(
@@ -319,28 +356,57 @@ mod tests {
     }
 
     #[test]
-    pub fn should_highlight_when_differences_are_observed() {
+    pub fn should_return_zero_value_tuple_when_differences_are_observed() {
+        let src = image::ImageBuffer::new(100, 100);
+        let tgt = image::ImageBuffer::new(100, 100);
+
+        let bounds = Bounds::new(0, 20, 0, 20);
+
+        let (diff, bounds_with_diff) = percentage_difference(&src, &tgt, &bounds, 10);
+
+        assert_eq!(0.0, diff);
+        assert_eq!(Vec::<Bounds>::new(), bounds_with_diff);
+    }
+
+    #[test]
+    pub fn should_return_non_zero_tuple_when_differences_are_observed() {
         let src = image::ImageBuffer::new(100, 100);
 
         let mut tgt = image::ImageBuffer::new(100, 100);
         *tgt.get_pixel_mut(15, 15) = image::Rgba([10, 10, 10, 255]);
         *tgt.get_pixel_mut(55, 55) = image::Rgba([10, 10, 10, 255]);
 
-        let mut tgt_clone1 = tgt.clone();
-        let mut tgt_clone2 = tgt.clone();
-
         let bounds = Bounds::new(0, 20, 0, 20);
 
-        highlight_difference(&src, &mut tgt_clone1, &bounds, 10);
+        let (diff, bounds_with_diff) = percentage_difference(&src, &tgt, &bounds, 10);
 
+        assert_eq!(0.25, diff);
+        assert_eq!(vec![Bounds::new(10, 20, 10, 20)], bounds_with_diff);
+    }
+
+    #[test]
+    pub fn should_highlight_only_the_specified_bounds() {
+        let img = image::ImageBuffer::new(100, 100);
+
+        let mut img_clone1 = img.clone();
+        let bounds = vec![Bounds::new(10, 20, 10, 20), Bounds::new(50, 60, 50, 60)];
+        highlight(&mut img_clone1, bounds);
+
+        let mut img_clone2 = img.clone();
         for i in 10..20 {
-            *tgt_clone2.get_pixel_mut(i, 10) = image::Rgba([255, 0, 0, 255]);
-            *tgt_clone2.get_pixel_mut(i, 19) = image::Rgba([255, 0, 0, 255]);
-            *tgt_clone2.get_pixel_mut(10, i) = image::Rgba([255, 0, 0, 255]);
-            *tgt_clone2.get_pixel_mut(19, i) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(i, 10) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(i, 19) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(10, i) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(19, i) = image::Rgba([255, 0, 0, 255]);
+        }
+        for i in 50..60 {
+            *img_clone2.get_pixel_mut(i, 50) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(i, 59) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(50, i) = image::Rgba([255, 0, 0, 255]);
+            *img_clone2.get_pixel_mut(59, i) = image::Rgba([255, 0, 0, 255]);
         }
 
-        assert_ne!(tgt, tgt_clone1);
-        assert_eq!(tgt_clone2, tgt_clone1);
+        assert_ne!(img, img_clone1);
+        assert_eq!(img_clone2, img_clone1);
     }
 }

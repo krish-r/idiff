@@ -12,12 +12,8 @@ diff - for images (compares images pixel by pixel)
 
 ## Approach
 
-This takes a naive two pass approach -
-
--   first pass - compare every pixel between the images and check for differences, and display the comparison status.
--   second pass - (if the `highlight` option is enabled)
-    -   compare every pixel in each block (default: `10x10` pixels) and check for differences, and if there is any, highlight the block.
-    -   store the output with the file name specified in the `output` option (default `TARGET_FILE_NAME_diff`).
+-   Compare every pixel between the images for every block and check for differences, and display the comparison status.
+-   if the `highlight` option is enabled, highlight the blocks with difference and store the output with the file name specified in the `output` option (default `TARGET_FILE_NAME_diff`).
 
 ## Dependencies
 
@@ -59,10 +55,10 @@ cargo install --path .
 
 ```sh
 # Download the binary from release page
-curl -LO https://github.com/krish-r/idiff/releases/download/0.1.0/idiff_0.1.0.tar.gz
+curl -LO https://github.com/krish-r/idiff/releases/download/0.2.0/idiff_0.2.0.tar.gz
 
 # Extract the archive
-tar xvzf ./idiff_0.1.0.tar.gz && rm -ir ./idiff_0.1.0.tar.gz
+tar xvzf ./idiff_0.2.0.tar.gz && rm -ir ./idiff_0.2.0.tar.gz
 
 # add executable permission to user
 chmod u+x ./idiff

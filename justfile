@@ -7,8 +7,14 @@ clean:
 check:
 	cargo check
 
+check-tests:
+	cargo check --tests
+
 clippy:
 	cargo clippy
+
+clippy-tests:
+	cargo clippy --tests
 
 build:
 	cargo build
